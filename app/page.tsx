@@ -245,7 +245,7 @@ export default function Home() {
               },
               {
                 id: 2,
-                title: "모바일 앱",
+                title: "모바일 app",
                 description: "사용자 친화적인 모바일 애플리케이션",
                 image: "https://images.unsplash.com/photo-1512941937669-90a1b58e7e9c?w=800&q=80",
                 tech: ["React Native", "TypeScript"],
