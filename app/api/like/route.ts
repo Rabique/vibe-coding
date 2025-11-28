@@ -1,24 +1,41 @@
 import { NextResponse } from "next/server";
-
-// 메모리 기반 저장소 (실제로는 DB를 사용해야 함)
-let likeCount = 42; // 기본 더미 숫자
-let likedUsers = new Set<string>(); // 좋아요를 누른 사용자 추적 (실제로는 세션이나 IP 기반)
-let lastUpdated = new Date().toISOString();
+import { supabase } from "../supabase/route";
 
 // GET: 현재 좋아요 수 조회
 export async function GET(request: Request) {
   try {
-    // 클라이언트 식별자 (실제로는 세션이나 IP 기반)
     const clientId = request.headers.get("x-client-id") || "anonymous";
-    const isLiked = likedUsers.has(clientId);
+
+    // 전체 좋아요 수 조회
+    const { count, error: countError } = await supabase
+      .from("likes")
+      .select("*", { count: "exact", head: true });
+
+    if (countError) {
+      console.error("Supabase 좋아요 수 조회 오류:", countError);
+      throw new Error(countError.message);
+    }
+
+    // 현재 클라이언트의 좋아요 상태 확인
+    const { data: likedData, error: likedError } = await supabase
+      .from("likes")
+      .select("id")
+      .eq("client_id", clientId)
+      .single();
+
+    if (likedError && likedError.code !== "PGRST116") { // PGRST116: No rows found
+      console.error("Supabase 클라이언트 좋아요 상태 조회 오류:", likedError);
+      throw new Error(likedError.message);
+    }
+
+    const isLiked = !!likedData;
 
     return NextResponse.json(
       {
         success: true,
         data: {
-          count: likeCount,
+          count: count || 0,
           isLiked: isLiked,
-          lastUpdated: lastUpdated,
         },
       },
       {
@@ -27,7 +44,7 @@ export async function GET(request: Request) {
           "Content-Type": "application/json",
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Headers": "Content-Type, x-client-id",
         },
       }
     );
@@ -48,34 +65,83 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { action } = body; // "like" or "unlike"
-    
-    // 클라이언트 식별자 (실제로는 세션이나 IP 기반)
-    const clientId = request.headers.get("x-client-id") || "anonymous";
-    const isCurrentlyLiked = likedUsers.has(clientId);
 
-    if (action === "like" && !isCurrentlyLiked) {
-      // 좋아요 추가
-      likeCount += 1;
-      likedUsers.add(clientId);
-      lastUpdated = new Date().toISOString();
-    } else if (action === "unlike" && isCurrentlyLiked) {
-      // 좋아요 취소
-      likeCount = Math.max(0, likeCount - 1);
-      likedUsers.delete(clientId);
-      lastUpdated = new Date().toISOString();
+    const clientId = request.headers.get("x-client-id") || "anonymous";
+
+    if (clientId === "anonymous") {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Authentication Error",
+          message: "클라이언트 ID가 필요합니다.",
+        },
+        { status: 401 }
+      );
     }
+
+    // 현재 클라이언트의 좋아요 상태 확인
+    const { data: existingLike, error: fetchError } = await supabase
+      .from("likes")
+      .select("id")
+      .eq("client_id", clientId)
+      .single();
+
+    if (fetchError && fetchError.code !== "PGRST116") { // PGRST116: No rows found
+      console.error("Supabase 좋아요 상태 확인 오류:", fetchError);
+      throw new Error(fetchError.message);
+    }
+
+    let message = "";
+
+    if (action === "like" && !existingLike) {
+      // 좋아요 추가
+      const { error } = await supabase.from("likes").insert([{ client_id: clientId }]);
+      if (error) {
+        console.error("Supabase 좋아요 추가 오류:", error);
+        throw new Error(error.message);
+      }
+      message = "좋아요가 추가되었습니다.";
+    } else if (action === "unlike" && existingLike) {
+      // 좋아요 취소
+      const { error } = await supabase.from("likes").delete().eq("client_id", clientId);
+      if (error) {
+        console.error("Supabase 좋아요 취소 오류:", error);
+        throw new Error(error.message);
+      }
+      message = "좋아요가 취소되었습니다.";
+    } else if (action === "like" && existingLike) {
+      message = "이미 좋아요를 눌렀습니다.";
+    } else if (action === "unlike" && !existingLike) {
+      message = "좋아요를 누르지 않았습니다.";
+    }
+
+    // 업데이트된 전체 좋아요 수 조회
+    const { count, error: countError } = await supabase
+      .from("likes")
+      .select("*", { count: "exact", head: true });
+
+    if (countError) {
+      console.error("Supabase 좋아요 수 조회 오류:", countError);
+      throw new Error(countError.message);
+    }
+
+    // 최종적으로 좋아요 상태 다시 확인
+    const { data: finalLikedData, error: finalLikedError } = await supabase
+      .from("likes")
+      .select("id")
+      .eq("client_id", clientId)
+      .single();
+    
+    const isLiked = !!finalLikedData;
 
     return NextResponse.json(
       {
         success: true,
         data: {
-          count: likeCount,
-          isLiked: likedUsers.has(clientId),
-          lastUpdated: lastUpdated,
+          count: count || 0,
+          isLiked: isLiked,
         },
-        message: likedUsers.has(clientId) 
-          ? "좋아요가 추가되었습니다." 
-          : "좋아요가 취소되었습니다.",
+        message: message,
       },
       {
         status: 200,
@@ -83,7 +149,7 @@ export async function POST(request: Request) {
           "Content-Type": "application/json",
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Headers": "Content-Type, x-client-id",
         },
       }
     );
@@ -106,7 +172,7 @@ export async function OPTIONS() {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Headers": "Content-Type, x-client-id",
     },
   });
 }

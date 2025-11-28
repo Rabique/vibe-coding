@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { supabase } from "../supabase/route"; // Supabase 클라이언트 import
 
 export interface GuestbookEntry {
   id: number;
@@ -7,34 +8,31 @@ export interface GuestbookEntry {
   createdAt: string;
 }
 
-// 메모리 기반 저장소 (실제로는 DB를 사용해야 함)
-let guestbookEntries: GuestbookEntry[] = [
-  {
-    id: 1,
-    name: "방문자1",
-    message: "멋진 포트폴리오네요!",
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 2,
-    name: "방문자2",
-    message: "프로젝트들이 인상적입니다.",
-    createdAt: new Date().toISOString(),
-  },
-];
-
-let nextId = 3;
-
 // GET: 방명록 목록 조회
 export async function GET() {
   try {
+    const { data, error } = await supabase
+      .from("guestbook")
+      .select("id, name, message, created_at")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Supabase 방명록 조회 오류:", error);
+      throw new Error(error.message);
+    }
+
+    const formattedData = data.map((entry: { id: number; name: string; message: string; created_at: string }) => ({
+      id: entry.id,
+      name: entry.name,
+      message: entry.message,
+      createdAt: new Date(entry.created_at).toISOString(),
+    }));
+
     return NextResponse.json(
       {
         success: true,
-        data: guestbookEntries.sort(
-          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        ),
-        count: guestbookEntries.length,
+        data: formattedData,
+        count: formattedData.length,
       },
       {
         status: 200,
@@ -109,20 +107,27 @@ export async function POST(request: Request) {
       );
     }
 
-    // 새 방명록 항목 생성
-    const newEntry: GuestbookEntry = {
-      id: nextId++,
-      name: name.trim(),
-      message: message.trim(),
-      createdAt: new Date().toISOString(),
-    };
+    const { data, error } = await supabase
+      .from("guestbook")
+      .insert([{ name: name.trim(), message: message.trim() }])
+      .select();
 
-    guestbookEntries.push(newEntry);
+    if (error) {
+      console.error("Supabase 방명록 작성 오류:", error);
+      throw new Error(error.message);
+    }
+
+    const newEntry = data[0];
 
     return NextResponse.json(
       {
         success: true,
-        data: newEntry,
+        data: {
+          id: newEntry.id,
+          name: newEntry.name,
+          message: newEntry.message,
+          createdAt: new Date(newEntry.created_at).toISOString(),
+        },
         message: "방명록이 성공적으로 작성되었습니다.",
       },
       {
@@ -176,19 +181,12 @@ export async function DELETE(request: Request) {
       );
     }
 
-    const index = guestbookEntries.findIndex((entry) => entry.id === entryId);
-    if (index === -1) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Not Found",
-          message: "해당 방명록을 찾을 수 없습니다.",
-        },
-        { status: 404 }
-      );
-    }
+    const { error } = await supabase.from("guestbook").delete().eq("id", entryId);
 
-    guestbookEntries.splice(index, 1);
+    if (error) {
+      console.error("Supabase 방명록 삭제 오류:", error);
+      throw new Error(error.message);
+    }
 
     return NextResponse.json(
       {
